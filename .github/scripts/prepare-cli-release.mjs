@@ -14,6 +14,7 @@ import { pathToFileURL } from "node:url";
 
 export const PRODUCT_ID = "memos-cloud-cli";
 export const PRODUCT_TITLE = { zh: "MemOS CLI", en: "MemOS CLI" };
+export const PUBLIC_RELEASE_LANGUAGE = "en";
 export const RELEASE_CATEGORIES = ["Added", "Improved", "Fixed"];
 export const DOCS_CATEGORIES = {
   Added: "New Features",
@@ -722,6 +723,7 @@ export function collectCliEvidence({
     docs_changes: files.filter((item) => /\.(md|mdx|rst)$/i.test(item.path)),
     release_note_quality_request: {
       candidate_count: 3,
+      public_release_language: PUBLIC_RELEASE_LANGUAGE,
       max_repair_attempts: MAX_DRAFT_ATTEMPTS,
       methodology: RELEASE_NOTE_METHODS,
       require_source_refs: true,
@@ -1010,39 +1012,93 @@ function docAgentReleaseNotesBody(draft) {
   return draft.release_items.length ? output.join("\n").trim() : "";
 }
 
+function normalizeGithubAuditToEnglish(markdown) {
+  const normalized = [];
+  for (const line of String(markdown || "").split(/\r?\n/)) {
+    if (!CJK_RE.test(line)) {
+      normalized.push(line);
+      continue;
+    }
+
+    const pullUrl = line.match(/https:\/\/github\.com\/[^\s)]+\/pull\/(\d+)/i);
+    if (pullUrl) {
+      const bullet = line.match(/^[ \t]*([*+-])[ \t]+/)?.[1] || "*";
+      const author = line.match(/\bby[ \t]+(@[A-Za-z0-9-]+)/i)?.[1] || "";
+      normalized.push(
+        `${bullet} Change from PR #${pullUrl[1]}${author ? ` by ${author}` : ""} in ${pullUrl[0]}`,
+      );
+      continue;
+    }
+
+    const compareUrl = line.match(/https:\/\/github\.com\/[^\s)]+\/compare\/[^\s)]+/i)?.[0];
+    if (compareUrl) {
+      normalized.push(`**Full Changelog**: ${compareUrl}`);
+      continue;
+    }
+
+    const heading = line.match(/^([ \t]*#{1,6})[ \t]+/);
+    if (heading) {
+      normalized.push(`${heading[1]} What's Changed`);
+    }
+  }
+
+  const body = normalized.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (!body) fail("GitHub What's Changed notes have no English audit content after normalization.");
+  if (CJK_RE.test(body)) fail("GitHub What's Changed notes still contain non-English visible text.");
+  return body;
+}
+
 export function composePublicReleaseNotes({
   githubNotes,
   draft,
   reviewedNotes = null,
 }) {
-  const generatedBody = String(githubNotes?.body || "").trim();
+  const generatedBody = normalizeGithubAuditToEnglish(githubNotes?.body);
   if (!generatedBody) fail("GitHub What's Changed notes are empty.");
   const docAgentBody = docAgentReleaseNotesBody(draft);
+  const reviewedBody = String(reviewedNotes?.body || "").trim();
+  const reviewedBodyIsEnglish = Boolean(reviewedBody) && !CJK_RE.test(reviewedBody);
+  const reviewedLanguageFallback = Boolean(reviewedNotes) && !reviewedBodyIsEnglish;
   let source;
   let primaryBody;
   let reviewedPath = "";
-  if (reviewedNotes) {
+  if (reviewedBodyIsEnglish) {
     source = "reviewed-file-plus-github-whats-changed";
-    primaryBody = reviewedNotes.body.trim();
+    primaryBody = reviewedBody;
     reviewedPath = reviewedNotes.path;
   } else if (docAgentBody) {
-    source = "validated-doc-agent-plus-github-whats-changed";
+    source = reviewedLanguageFallback
+      ? "validated-doc-agent-plus-github-whats-changed-after-reviewed-language-fallback"
+      : "validated-doc-agent-plus-github-whats-changed";
     primaryBody = docAgentBody;
+    reviewedPath = reviewedNotes?.path || "";
   } else {
-    source = "github-whats-changed-after-doc-agent-skip";
+    source = reviewedLanguageFallback
+      ? "github-whats-changed-after-reviewed-language-fallback"
+      : "github-whats-changed-after-doc-agent-skip";
     primaryBody = "";
+    reviewedPath = reviewedNotes?.path || "";
   }
   const body = [primaryBody, generatedBody].filter(Boolean).join("\n\n---\n\n");
+  if (CJK_RE.test(body)) {
+    fail("Composed public Release notes must contain English visible text only.");
+  }
   assertNoSensitiveContent(body, "composed public Release notes");
+  const warning = [
+    String(githubNotes?.warning || ""),
+    reviewedLanguageFallback
+      ? `The reviewed Release note was not English and was replaced by the validated English ${docAgentBody ? "Doc Agent draft" : "GitHub audit summary"}.`
+      : "",
+  ].filter(Boolean).join(" ");
   return {
     source,
     name: String(githubNotes?.name || "MemOS CLI Release"),
     body: `${body.trim()}\n`,
-    warning: String(githubNotes?.warning || ""),
+    warning,
     reviewed_path: reviewedPath,
     components: [
-      reviewedNotes ? "reviewed_release_notes_file" : "",
-      !reviewedNotes && docAgentBody ? "validated_doc_agent_draft" : "",
+      reviewedBodyIsEnglish ? "reviewed_release_notes_file" : "",
+      !reviewedBodyIsEnglish && docAgentBody ? "validated_doc_agent_draft" : "",
       "github_whats_changed",
     ].filter(Boolean),
   };

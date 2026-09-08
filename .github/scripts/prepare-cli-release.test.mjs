@@ -859,6 +859,46 @@ test("uses an optional reviewed version note and otherwise composes the validate
   });
 });
 
+test("normalizes non-English GitHub audit titles without losing PR traceability", () => {
+  const release = composePublicReleaseNotes({
+    githubNotes: {
+      name: "MemOS CLI v1.0.9",
+      body: [
+        "## What's Changed",
+        "",
+        "* 修复登录失败提示 by @example in https://github.com/MemTensor/MemOS-Cloud-CLI/pull/45",
+        "",
+        "**Full Changelog**: https://github.com/MemTensor/MemOS-Cloud-CLI/compare/v1.0.8...v1.0.9",
+      ].join("\n"),
+    },
+    draft: validDraft,
+  });
+
+  assert.doesNotMatch(release.body, /\p{Script=Han}/u);
+  assert.match(release.body, /Change from PR #45 by @example/);
+  assert.match(release.body, /MemTensor\/MemOS-Cloud-CLI\/pull\/45/);
+  assert.match(release.body, /compare\/v1\.0\.8\.\.\.v1\.0\.9/);
+});
+
+test("falls back to the validated English draft when a reviewed note is non-English", () => {
+  const release = composePublicReleaseNotes({
+    githubNotes: {
+      name: "MemOS CLI v1.0.9",
+      body: "## What's Changed\n\n* Fix authentication errors.",
+    },
+    draft: validDraft,
+    reviewedNotes: {
+      path: ".github/release-notes/v1.0.9.md",
+      body: "## 更新说明\n\n- 修复登录失败提示。",
+    },
+  });
+
+  assert.doesNotMatch(release.body, /\p{Script=Han}/u);
+  assert.match(release.body, /Authentication errors/);
+  assert.match(release.warning, /reviewed Release note was not English/i);
+  assert.match(release.source, /reviewed-language-fallback/);
+});
+
 test("rejects placeholder or sensitive reviewed Release notes", () => {
   withFixture(() => {
     write(
