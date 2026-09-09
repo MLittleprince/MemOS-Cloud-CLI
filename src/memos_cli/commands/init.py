@@ -79,7 +79,6 @@ AGENT_REGISTRY: dict[str, AgentConfig] = {
     "copilot":     AgentConfig(Path.home() / ".copilot" / "skills",                  "copilot-instructions.md"),
     "deepseek":    AgentConfig(Path.home() / ".dsh" / "skills",                      "AGENTS.md",
                                skills_namespace=None),
-    "fork-canary": AgentConfig(Path.home() / ".fork-canary" / "skills",              "AGENTS.md"),
 }
 
 SUPPORTED_SKILL_AGENTS: dict[str, Path] = {
